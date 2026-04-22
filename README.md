@@ -42,3 +42,13 @@ Commit? [Y/n]:
 ```
 
 Press Enter to commit, or type `n` to abort.
+
+## Commit format
+
+```
+<type>: <message> (<suffix>)
+```
+
+- `type`: `feat`, `fix`, `refactor`, `chore`, `docs`, `test`, `style`, `perf`, `ci`
+- `message`: short, imperative, lowercase, no period
+- `suffix`: optional — issue ID or note, prompted interactively
