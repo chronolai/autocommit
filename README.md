@@ -52,3 +52,11 @@ Press Enter to commit, or type `n` to abort.
 - `type`: `feat`, `fix`, `refactor`, `chore`, `docs`, `test`, `style`, `perf`, `ci`
 - `message`: short, imperative, lowercase, no period
 - `suffix`: optional — issue ID or note, prompted interactively
+
+## Dev
+
+```bash
+uv sync
+uv run main.py          # run locally
+uv run main.py test     # ping the default config
+```
