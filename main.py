@@ -164,7 +164,9 @@ def main():
     if args.command == "test":
         cmd_test(env)
     else:
-        cmd_run(env, skip_suffix=getattr(args, "no_suffix", False))
+        config_no_suffix = env.get("arguments", {}).get("no_suffix", False)
+        cli_no_suffix = getattr(args, "no_suffix", False)
+        cmd_run(env, skip_suffix=config_no_suffix or cli_no_suffix)
 
 
 if __name__ == "__main__":
