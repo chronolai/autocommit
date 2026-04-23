@@ -103,7 +103,7 @@ def generate_commit_message(env: dict, diff: str | None = None, initial: bool = 
     return response.choices[0].message.content.strip()
 
 
-def cmd_run(env: dict):
+def cmd_run(env: dict, skip_suffix: bool = False):
     if not has_commits():
         message = generate_commit_message(env, initial=True)
     else:
@@ -113,9 +113,10 @@ def cmd_run(env: dict):
             sys.exit(1)
         message = generate_commit_message(env, diff=diff)
 
-    suffix = input("Any issue ID or note for the () suffix? (leave blank to skip): ").strip()
-    if suffix:
-        message = f"{message} ({suffix})"
+    if not skip_suffix:
+        suffix = input("Any issue ID or note for the () suffix? (leave blank to skip): ").strip()
+        if suffix:
+            message = f"{message} ({suffix})"
 
     print(f"\n{message}\n")
     confirm = input("Commit? [Y/n]: ").strip().lower()
@@ -141,6 +142,12 @@ def cmd_test(env: dict):
 def main():
     argv = sys.argv[1:]
 
+    skip_suffix = False
+    for flag in ("--no-suffix", "-n"):
+        if flag in argv:
+            argv.remove(flag)
+            skip_suffix = True
+
     if argv and argv[-1] in ("run", "test"):
         command = argv[-1]
         env_name = argv[0] if len(argv) == 2 else None
@@ -152,7 +159,7 @@ def main():
     env = get_env(config, env_name)
 
     if command == "run":
-        cmd_run(env)
+        cmd_run(env, skip_suffix=skip_suffix)
     else:
         cmd_test(env)
 
