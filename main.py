@@ -57,6 +57,13 @@ def get_env(config: dict, name: str | None) -> dict:
     return next(iter(envs.values()))
 
 
+def has_commits() -> bool:
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        capture_output=True, text=True
+    ).returncode == 0
+
+
 def get_git_diff() -> str:
     staged = subprocess.run(
         ["git", "diff", "--staged"],
@@ -78,13 +85,18 @@ def get_git_diff() -> str:
     ).stdout.strip()
 
 
-def generate_commit_message(diff: str, env: dict) -> str:
+def generate_commit_message(env: dict, diff: str | None = None, initial: bool = False) -> str:
+    if initial:
+        user_content = "This is the very first commit of a brand new repository. Generate a conventional commit message for initializing the project."
+    else:
+        user_content = f"Diff:\n{diff}"
+
     client = OpenAI(base_url=env["url"], api_key=env["key"])
     response = client.chat.completions.create(
         model=env["model"],
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"Diff:\n{diff}"},
+            {"role": "user", "content": user_content},
         ],
         temperature=0.2,
     )
@@ -92,12 +104,14 @@ def generate_commit_message(diff: str, env: dict) -> str:
 
 
 def cmd_run(env: dict):
-    diff = get_git_diff()
-    if not diff:
-        print("No changes detected.", file=sys.stderr)
-        sys.exit(1)
-
-    message = generate_commit_message(diff, env)
+    if not has_commits():
+        message = generate_commit_message(env, initial=True)
+    else:
+        diff = get_git_diff()
+        if not diff:
+            print("No changes detected.", file=sys.stderr)
+            sys.exit(1)
+        message = generate_commit_message(env, diff=diff)
 
     suffix = input("Any issue ID or note for the () suffix? (leave blank to skip): ").strip()
     if suffix:
