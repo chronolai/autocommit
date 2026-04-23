@@ -2,6 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #   "openai>=2.32.0",
+#   "rich>=13.0.0",
 # ]
 # ///
 
@@ -11,8 +12,14 @@ import sys
 import json
 from pathlib import Path
 from openai import OpenAI
+from rich.console import Console
+from rich.panel import Panel
+from rich.prompt import Prompt, Confirm
+from rich.text import Text
+from rich import print as rprint
 
 CONFIG_PATH = Path.home() / ".autocommit.json"
+console = Console()
 
 SYSTEM_PROMPT = """You are a git commit message generator that strictly follows Conventional Commits.
 
@@ -25,6 +32,18 @@ Rules:
 - Output ONLY the commit message, nothing else
 """
 
+COMMIT_TYPE_COLORS = {
+    "feat": "bright_green",
+    "fix": "bright_red",
+    "refactor": "bright_cyan",
+    "chore": "yellow",
+    "docs": "bright_blue",
+    "test": "magenta",
+    "style": "bright_magenta",
+    "perf": "bright_yellow",
+    "ci": "cyan",
+}
+
 
 def load_config() -> dict:
     if not CONFIG_PATH.exists():
@@ -34,16 +53,16 @@ def load_config() -> dict:
     envs = config.get("env", {})
 
     if not envs:
-        print("No configuration found. Let's set one up.\n")
-        name = input("Config name [default]: ").strip() or "default"
-        url = input("API URL: ").strip()
-        key = input("API Key: ").strip()
-        model = input("Model: ").strip()
+        console.print("\n[yellow]No configuration found. Let's set one up.[/yellow]\n")
+        name = Prompt.ask("Config name", default="default")
+        url = Prompt.ask("API URL")
+        key = Prompt.ask("API Key", password=True)
+        model = Prompt.ask("Model")
 
         envs[name] = {"url": url, "key": key, "model": model}
         config["env"] = envs
         CONFIG_PATH.write_text(json.dumps(config, indent=2))
-        print(f"\nConfig '{name}' saved to {CONFIG_PATH}\n")
+        console.print(f"\n[green]Config '[bold]{name}[/bold]' saved to {CONFIG_PATH}[/green]\n")
 
     return config
 
@@ -52,7 +71,7 @@ def get_env(config: dict, name: str | None) -> dict:
     envs = config["env"]
     if name:
         if name not in envs:
-            print(f"Config '{name}' not found.", file=sys.stderr)
+            console.print(f"[bold red]Config '{name}' not found.[/bold red]", file=sys.stderr)
             sys.exit(1)
         return envs[name]
     return next(iter(envs.values()))
@@ -104,40 +123,98 @@ def generate_commit_message(env: dict, diff: str | None = None, initial: bool = 
     return response.choices[0].message.content.strip()
 
 
+def has_staged_files() -> bool:
+    result = subprocess.run(
+        ["git", "diff", "--staged", "--name-only"],
+        capture_output=True, text=True
+    )
+    return bool(result.stdout.strip())
+
+
+def colorize_git_status(status: str) -> Text:
+    text = Text()
+    in_staged = False
+    for line in status.splitlines():
+        if line.startswith("On branch"):
+            text.append(line + "\n", style="bold")
+            in_staged = False
+        elif line.startswith("Changes to be committed"):
+            text.append(line + "\n", style="bold")
+            in_staged = True
+        elif line.startswith("Changes not staged") or line.startswith("Untracked files"):
+            text.append(line + "\n", style="bold")
+            in_staged = False
+        elif in_staged and line.startswith("\t"):
+            text.append(line + "\n", style="green")
+        elif not in_staged and line.startswith("\t"):
+            text.append(line + "\n", style="red")
+        else:
+            text.append(line + "\n", style="dim")
+    return text
+
+
+def format_commit_message(message: str) -> Panel:
+    parts = message.split(":", 1)
+    if len(parts) == 2:
+        commit_type = parts[0].strip()
+        color = COMMIT_TYPE_COLORS.get(commit_type, "bright_white")
+        styled = Text()
+        styled.append(commit_type, style=f"bold {color}")
+        styled.append(":", style="bold white")
+        styled.append(parts[1], style="bright_white")
+    else:
+        styled = Text(message, style="bright_white")
+
+    return Panel(styled, title="[bold]Suggested Commit[/bold]", border_style="bright_blue", padding=(0, 2))
+
+
 def cmd_run(env: dict, skip_suffix: bool = False):
+    status = subprocess.run(["git", "status"], capture_output=True, text=True).stdout
+    console.print(Panel(colorize_git_status(status.rstrip()), title="[bold]Git Status[/bold]", border_style="blue"))
+
+    if has_commits() and not has_staged_files():
+        console.print("\n[bold red]No staged files.[/bold red] Please run [yellow]`git add`[/yellow] before committing.\n")
+        sys.exit(1)
+
     if not has_commits():
-        message = generate_commit_message(env, initial=True)
+        with console.status("[cyan]Generating commit message...[/cyan]"):
+            message = generate_commit_message(env, initial=True)
     else:
         diff = get_git_diff()
         if not diff:
-            print("No changes detected.", file=sys.stderr)
+            console.print("[bold red]No changes detected.[/bold red]")
             sys.exit(1)
-        message = generate_commit_message(env, diff=diff)
+        with console.status("[cyan]Generating commit message...[/cyan]"):
+            message = generate_commit_message(env, diff=diff)
 
     if not skip_suffix:
-        suffix = input("Any issue ID or note for the () suffix? (leave blank to skip): ").strip()
+        suffix = Prompt.ask("\n[dim]Issue ID or note for the () suffix[/dim]", default="").strip()
         if suffix:
             message = f"{message} ({suffix})"
 
-    print(f"\n{message}\n")
-    confirm = input("Commit? [Y/n]: ").strip().lower()
-    if confirm in ("n", "no"):
-        print("Aborted.", file=sys.stderr)
+    console.print()
+    console.print(format_commit_message(message))
+
+    if not Confirm.ask("\n[bold]Commit?[/bold]", default=True):
+        console.print("[yellow]Aborted.[/yellow]")
         sys.exit(0)
 
     result = subprocess.run(["git", "commit", "-m", message])
+    if result.returncode == 0:
+        console.print("\n[bold bright_green]Committed successfully![/bold bright_green]")
     sys.exit(result.returncode)
 
 
 def cmd_test(env: dict):
-    print(f"Testing config: url={env['url']} model={env['model']}")
+    console.print(f"[dim]Testing config:[/dim] url=[cyan]{env['url']}[/cyan] model=[cyan]{env['model']}[/cyan]")
     client = OpenAI(base_url=env["url"], api_key=env["key"])
-    response = client.chat.completions.create(
-        model=env["model"],
-        messages=[{"role": "user", "content": "ping"}],
-        max_tokens=16,
-    )
-    print(f"Response: {response.choices[0].message.content.strip()}")
+    with console.status("[cyan]Pinging model...[/cyan]"):
+        response = client.chat.completions.create(
+            model=env["model"],
+            messages=[{"role": "user", "content": "ping"}],
+            max_tokens=16,
+        )
+    console.print(f"[green]Response:[/green] {response.choices[0].message.content.strip()}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -170,4 +247,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Interrupted.[/yellow]")
+        sys.exit(130)
