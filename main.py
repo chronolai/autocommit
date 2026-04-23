@@ -5,6 +5,7 @@
 # ]
 # ///
 
+import argparse
 import subprocess
 import sys
 import json
@@ -139,29 +140,31 @@ def cmd_test(env: dict):
     print(f"Response: {response.choices[0].message.content.strip()}")
 
 
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="autocommit")
+    parser.add_argument("-e", "--env", dest="env_name", default=None, help="Config env name (default: first in config)")
+
+    subparsers = parser.add_subparsers(dest="command")
+
+    run_parser = subparsers.add_parser("run", help="Generate a commit message and commit (default)")
+    run_parser.add_argument("-n", "--no-suffix", action="store_true", help="Skip the issue ID suffix prompt")
+
+    subparsers.add_parser("test", help="Ping the configured model to verify connectivity")
+
+    return parser
+
+
 def main():
-    argv = sys.argv[1:]
-
-    skip_suffix = False
-    for flag in ("--no-suffix", "-n"):
-        if flag in argv:
-            argv.remove(flag)
-            skip_suffix = True
-
-    if argv and argv[-1] in ("run", "test"):
-        command = argv[-1]
-        env_name = argv[0] if len(argv) == 2 else None
-    else:
-        command = "run"
-        env_name = argv[0] if argv else None
+    parser = build_parser()
+    args = parser.parse_args()
 
     config = load_config()
-    env = get_env(config, env_name)
+    env = get_env(config, args.env_name)
 
-    if command == "run":
-        cmd_run(env, skip_suffix=skip_suffix)
-    else:
+    if args.command == "test":
         cmd_test(env)
+    else:
+        cmd_run(env, skip_suffix=getattr(args, "no_suffix", False))
 
 
 if __name__ == "__main__":

@@ -6,7 +6,11 @@ A CLI tool that generates [Conventional Commits](https://www.conventionalcommits
 
 ```bash
 alias autocommit='uv run https://raw.githubusercontent.com/chronolai/autocommit/refs/heads/master/main.py'
-autocommit test          # ping "[default]" config to verify connectivity
+autocommit                    # generate a commit message using the default config
+autocommit run -n             # skip the issue ID suffix prompt
+autocommit -e work run        # use the "work" config
+autocommit test               # ping the default config to verify connectivity
+autocommit -e work test       # ping the "work" config
 ```
 
 On first run, if `~/.autocommit.json` is missing or empty, you'll be prompted to set up a config:
@@ -43,6 +47,13 @@ Commit? [Y/n]:
 
 Press Enter to commit, or type `n` to abort.
 
+If the repository has no commits yet, autocommit skips the diff and asks the model to generate an initial commit message directly.
+
+## Options
+
+- `-e`, `--env <name>`: select a named config (default: first entry in `~/.autocommit.json`)
+- `run -n`, `run --no-suffix`: skip the issue ID suffix prompt and commit directly
+
 ## Commit format
 
 ```
@@ -57,6 +68,8 @@ Press Enter to commit, or type `n` to abort.
 
 ```bash
 uv sync
-uv run main.py          # run locally
-uv run main.py test     # ping the default config
+uv run main.py                 # run locally
+uv run main.py run -n          # skip the suffix prompt
+uv run main.py -e work run     # use the "work" config
+uv run main.py test            # ping the default config
 ```
