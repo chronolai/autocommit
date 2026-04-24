@@ -7,15 +7,19 @@
 # ///
 
 import argparse
+import itertools
 import os
+import select
 import subprocess
 import sys
 import json
+import termios
+import threading
+import tty
 from pathlib import Path
 from openai import OpenAI
 from rich.console import Console
 from rich.panel import Panel
-from rich.prompt import Prompt, Confirm
 from rich.text import Text
 from rich import print as rprint
 
@@ -132,6 +136,114 @@ def has_staged_files() -> bool:
     return bool(result.stdout.strip())
 
 
+def _generate_with_cancel(env: dict, **kwargs) -> str | None:
+    """Run generate_commit_message in a daemon thread. Returns None if ESC pressed."""
+    result: list[str | None] = [None]
+    exc: list[BaseException | None] = [None]
+    done = threading.Event()
+
+    def worker():
+        try:
+            result[0] = generate_commit_message(env, **kwargs)
+        except Exception as e:
+            exc[0] = e
+        finally:
+            done.set()
+
+    threading.Thread(target=worker, daemon=True).start()
+
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    spinner = itertools.cycle('⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏')
+    msg = " Generating commit message... (ESC to abort)"
+    try:
+        tty.setcbreak(fd)
+        while not done.is_set():
+            sys.stdout.write(f'\r{next(spinner)}{msg}')
+            sys.stdout.flush()
+            if select.select([sys.stdin], [], [], 0.1)[0]:
+                ch = sys.stdin.read(1)
+                if ch == '\x1b':
+                    if select.select([sys.stdin], [], [], 0.05)[0]:
+                        sys.stdin.read(2)
+                        continue
+                    sys.stdout.write('\n')
+                    sys.stdout.flush()
+                    return None
+        sys.stdout.write('\r' + ' ' * (len(msg) + 1) + '\r')
+        sys.stdout.flush()
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+    if exc[0]:
+        raise exc[0]
+    return result[0]
+
+
+def _read_line_or_esc(prompt: str) -> str | None:
+    """Read a line of input. Returns None if ESC is pressed."""
+    console.print(prompt, end="")
+    sys.stdout.flush()
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    buf = []
+    try:
+        tty.setcbreak(fd)
+        while True:
+            ch = sys.stdin.read(1)
+            if ch == '\x1b':
+                if select.select([sys.stdin], [], [], 0.05)[0]:
+                    sys.stdin.read(2)  # drain arrow-key sequence
+                    continue
+                sys.stdout.write('\n')
+                sys.stdout.flush()
+                return None
+            elif ch in ('\r', '\n'):
+                sys.stdout.write('\n')
+                sys.stdout.flush()
+                return ''.join(buf)
+            elif ch in ('\x7f', '\x08'):
+                if buf:
+                    buf.pop()
+                    sys.stdout.write('\b \b')
+                    sys.stdout.flush()
+            elif ord(ch) >= 32:
+                buf.append(ch)
+                sys.stdout.write(ch)
+                sys.stdout.flush()
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def _confirm_or_esc(prompt: str) -> bool | None:
+    """Single-key confirm. Returns True/False, or None if ESC is pressed."""
+    console.print(prompt, end="")
+    sys.stdout.flush()
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        while True:
+            ch = sys.stdin.read(1)
+            if ch == '\x1b':
+                if select.select([sys.stdin], [], [], 0.05)[0]:
+                    sys.stdin.read(2)
+                    continue
+                sys.stdout.write('\n')
+                sys.stdout.flush()
+                return None
+            elif ch in ('y', 'Y', '\r', '\n'):
+                sys.stdout.write('y\n')
+                sys.stdout.flush()
+                return True
+            elif ch in ('n', 'N'):
+                sys.stdout.write('n\n')
+                sys.stdout.flush()
+                return False
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
 def colorize_git_status(status: str) -> Text:
     text = Text()
     in_staged = False
@@ -182,25 +294,32 @@ def cmd_run(env: dict, skip_suffix: bool = False):
         sys.exit(1)
 
     if not has_commits():
-        with console.status("[cyan]Generating commit message...[/cyan]"):
-            message = generate_commit_message(env, initial=True)
+        message = _generate_with_cancel(env, initial=True)
     else:
         diff = get_git_diff()
         if not diff:
             console.print("[bold red]No changes detected.[/bold red]")
             sys.exit(1)
-        with console.status("[cyan]Generating commit message...[/cyan]"):
-            message = generate_commit_message(env, diff=diff)
+        message = _generate_with_cancel(env, diff=diff)
+
+    if message is None:
+        console.print("[yellow]Aborted.[/yellow]")
+        sys.exit(0)
 
     if not skip_suffix:
-        suffix = Prompt.ask("\n[dim]Issue ID or note for the () suffix[/dim]", default="").strip()
+        suffix = _read_line_or_esc("\n[dim]Issue ID or note for the () suffix[/dim] [dim](ESC to abort)[/dim]: ")
+        if suffix is None:
+            console.print("[yellow]Aborted.[/yellow]")
+            sys.exit(0)
+        suffix = suffix.strip()
         if suffix:
             message = f"{message} ({suffix})"
 
     console.print()
     console.print(format_commit_message(message))
 
-    if not Confirm.ask("\n[bold]Commit?[/bold]", default=True):
+    confirmed = _confirm_or_esc("\n[bold]Commit?[/bold] [dim](y/n/ESC)[/dim] ")
+    if not confirmed:
         console.print("[yellow]Aborted.[/yellow]")
         sys.exit(0)
 
