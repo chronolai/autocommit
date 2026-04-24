@@ -7,6 +7,7 @@
 # ///
 
 import argparse
+import os
 import subprocess
 import sys
 import json
@@ -169,7 +170,11 @@ def format_commit_message(message: str) -> Panel:
 
 
 def cmd_run(env: dict, skip_suffix: bool = False):
-    status = subprocess.run(["git", "status"], capture_output=True, text=True).stdout
+    status = subprocess.run(
+        ["git", "status"],
+        capture_output=True, text=True,
+        env={**os.environ, "LC_ALL": "C", "LANG": "C"},
+    ).stdout
     console.print(Panel(colorize_git_status(status.rstrip()), title="[bold]Git Status[/bold]", border_style="blue"))
 
     if has_commits() and not has_staged_files():
